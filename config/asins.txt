@@ -1,0 +1,70 @@
+# The ASINs the SQP report is requested for: ASIN, then the product name as it appears in
+# powerbidb.2024BrandAnalytics. Copied from the database on 2026-10-24 (65 lines).
+# Names are reference only: they are never written and never used as a key. An ASIN listed
+# twice is requested once (60 unique ASINs; EXPECTED_ASIN_COUNT is compared with this number).
+# Lines starting with # are ignored.
+B01KIFISX2  Circle Sunshade
+B08RZ5R3BT  Window Sox Large
+B095WNGQ35  RV
+B0C36YRQWN  Moss Pole
+B07K6YKZBK  Snow Cover
+B0CR6B5BVK  Autovir Circle
+B09DT8Z793  Snow Brush
+B01I90VP0G  Classic
+B083QJ3QQT  Jeep
+B0C5J9RVVF  Seat Cusion
+B08RZB4F63  Rollershade
+B079J89SJ3  Square
+B08T743444  Accordion Large
+B08T75LT1Z  steeringdesk
+B0BXPPY83M  Circle V cut
+B0C4TK47LS  Blindspot Mirror & Rain Visor 2pack
+B0CR6CZQXM  Autovir Circle Medium Plus
+B0CBM4QTHC  Roller new 2Pack - medium
+B01KIFITRM  Truck
+B06XYH2WXT  Van
+B01M4NRZAG  Window Sox Medium
+B08423LQZ3  Square Large
+B079DXQZ7L  Window Shade 2Pack
+B08RJVMGP7  Medium Plus
+B08VDWSC6Z  Baby Seat
+B08423NNZR  Square Small
+B08RJSWRDV  Circle Tesla
+B0CSL6ZD7W  Autovir Circle Small
+B092QLCWJT  Rollershade Large
+B0CVQDBL46  AccordDF Large
+B0CSKTTBGZ  Autovir Circle X Large
+B0CR6DVSX5  Autovir Square Medium
+B09MFD4T15  Window Sox XL
+B0CSL7D4WX  Autovir Circle Large
+B0CR6FZV3J  Autovir Square Large
+B0BZCQMBGV  Glare patch
+B09NR6JSZY  Accordion Truck
+B08T7417JG  Accordion small
+B08T75LT1Z  Steering Desk
+B01I90VP0G  Small
+B0BNQKVCCM  2 Shade
+B0CTZXL4QP  Window Sox XXL
+B0CV12PB8C  ClingBaby 4 pack
+B0BXPNXKF1  V cut sun shade small
+B0CSL9QXY5  Autovir Circle XS
+B0953VSDL7  Semi truck sun shade
+B08T75TJYY  Tube Black 2 pack Std
+B0BXPT8NF7  V cut sun shade large
+B0956YJYSX  Square sun shade Jeep
+B086RL1HPM  windowshade XL 2 Semi + 2 Trans
+B08RSDRB6S  Square sun shade Bus
+B09MYQC5Q5  Accordian Sunshade American Flag
+B0BXPR76Q2  V cut sun shade mediumplus
+B0D3LX2F4S  Suction Cup Large
+B0CSSSNBXD  Autovir Square Small
+B0CR6LVYJL  Blindspot Mirror & Rain Visor 2pack
+B09MYDT881  Accordian Sunshade Matt Grey
+B095WN7ZK5  Accordion Semi truck
+B08T75SX8M  Sweat towel
+B0CTH42CRP  Umbrella sun shade carbon fiber Medium Plus
+B09ZX24PJT  Rollershade XL
+B09P555HBN  BW FLAG printed Circle Medium Sunshade
+B095WNGQ35  Moss Pole
+B086RL1HPM  windowshade XL 2 Semi 2 Trans
+B0CR6LVYJL  Name Not Found

@@ -1,0 +1,16 @@
+# Amazon SQP updater on the Linux cron server. Install with `crontab -e`. Absolute paths: cron's PATH is minimal.
+# Times below assume the server clock is IST (Asia/Kolkata); check with `timedatectl`. If the server runs on UTC,
+# use the UTC lines instead (IST = UTC + 5:30). Run each job in ONE place only (not also on the Windows PC).
+# Each run appends one line to logs/cron.log; details are in logs/sqp_updater.log.
+MAILTO=""
+
+# 1) Weekly SQP (SP-API) -> 2024BrandAnalytics: Monday 15:00 IST, backups Tue-Fri (stop at once when the week is written)
+0 15 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
+# UTC server:  30 9 * * 1-5 ...same command...
+
+# 2) Competitors (Seller Central Search Query Details) -> BrandAnalytics_Competitor: 3 parts a night, 400 pages each
+#    00:00, 03:00, 06:00 IST. xvfb-run gives Chrome a virtual screen (apt install xvfb). flock: never two at once.
+0 0,3,6 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --sc-night --quiet >> logs/cron-output.log 2>&1
+# UTC server (18:30, 21:30, 00:30 UTC = 00:00, 03:00, 06:00 IST):
+# 30 18,21 * * * ...same command...
+# 30 0 * * *     ...same command...
