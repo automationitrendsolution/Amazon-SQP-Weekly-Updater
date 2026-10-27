@@ -166,3 +166,45 @@ def test_powerbi_db_names_from_the_daily_project_are_accepted(monkeypatch):
     monkeypatch.setenv("POWERBI_DB_PASSWORD", "not-a-real-password")
     settings = run.load_settings()
     assert (settings.db_host, settings.db_user, settings.db_table) == ("203.0.113.10", "someone", "2024BrandAnalytics")
+
+
+def test_weekly_scrape_is_the_cron_name_of_sc_night(monkeypatch):
+    called = []
+    monkeypatch.setattr(run, "_competitors_night", lambda args, settings, logger: called.append(args.sc_night) or (0, "ok"))
+    assert run.main(["--weekly-scrape"]) == 0
+    assert called == [True]
+
+
+def test_weekly_scrape_cannot_be_combined_with_apply():
+    with pytest.raises(SystemExit):
+        parse(["--weekly-scrape", "--apply"])
+
+
+def test_weekly_scrape_stores_a_scraped_week_that_was_not_stored_yet(monkeypatch, tmp_path):
+    # A week whose pages are all saved but whose last load failed is stored by the next run.
+    settings = run.load_settings()
+    calls = []
+    monkeypatch.setattr(run, "_competitors", lambda args, s, logger: calls.append(args.sc_load) or (0, "loaded"))
+    monkeypatch.setattr(run, "_loaded_pages", lambda s, end: 0)
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def execute(self, *a): pass
+        def fetchone(self): return {"d": dt.datetime(2026, 10, 17)}
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def cursor(self): return Cursor()
+        def rollback(self): pass
+
+    import contextlib
+    monkeypatch.setattr(run.powerbi, "connect", lambda s, read_only=True: contextlib.nullcontext(Conn()))
+    from app import competitors
+    monkeypatch.setattr(competitors, "queries_for_week", lambda *a, **k: {"B0TESTAAAA": ["q"]})
+    folder = settings.data_dir / "sellercentral" / "2026-10-17"
+    folder.mkdir(parents=True)
+    (folder / "B0TESTAAAA_q.json").write_text('{"search_query": "q"}', encoding="utf-8")
+    assert run.main(["--weekly-scrape"]) == 0
+    assert calls == [["2026-10-11", "2026-10-17"]]

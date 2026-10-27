@@ -207,7 +207,7 @@ insert and every changed value, old → new) for review. The `--apply` run reuse
 | Task | Command |
 | --- | --- |
 | Sign in once (Windows: Chrome window; server: OTP in the terminal) | `run.py --sc-login` / `run.py --sc-login --terminal` |
-| Scheduled part: next unfinished week, up to 400 pages, then load | `run.py --sc-night` |
+| Scheduled part (cron): web-scrape the next unfinished week, up to 400 pages, and store it | `run.py --weekly-scrape` (same as `--sc-night`) |
 | Save pages of one week by hand (continues where it stopped) | `run.py --sc-capture 2026-10-11 2026-10-17 [--max-pages 400] [--top 100]` |
 | Load a week's saved pages into the table | `run.py --sc-load 2026-10-11 2026-10-17` |
 | Open one Seller Central page and save a screenshot (diagnostics) | `run.py --sc-inspect "<url>"` |
@@ -240,15 +240,14 @@ MAILTO=""
 0 15 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
 
 # Competitors: 3 parts a night, 00:00, 03:00, 06:00 IST (= US Pacific business hours)
-0 0,3,6 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --sc-night --quiet >> logs/cron-output.log 2>&1
+0 0,3,6 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --weekly-scrape --quiet >> logs/cron-output.log 2>&1
 ```
 
 **Server clock on UTC** (same times, IST = UTC + 5:30):
 
 ```cron
 30 9 * * 1-5   cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
-30 18,21 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --sc-night --quiet >> logs/cron-output.log 2>&1
-30 0 * * *     cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --sc-night --quiet >> logs/cron-output.log 2>&1
+30 0,18,21 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --weekly-scrape --quiet >> logs/cron-output.log 2>&1
 ```
 
 `flock` keeps two scraper parts from overlapping, `timeout` ends a part that hangs, and `xvfb-run` gives the

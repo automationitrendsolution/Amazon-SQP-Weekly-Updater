@@ -10,7 +10,6 @@ MAILTO=""
 
 # 2) Competitors (Seller Central Search Query Details) -> BrandAnalytics_Competitor: 3 parts a night, 400 pages each
 #    00:00, 03:00, 06:00 IST. xvfb-run gives Chrome a virtual screen (apt install xvfb). flock: never two at once.
-0 0,3,6 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --sc-night --quiet >> logs/cron-output.log 2>&1
-# UTC server (18:30, 21:30, 00:30 UTC = 00:00, 03:00, 06:00 IST):
-# 30 18,21 * * * ...same command...
-# 30 0 * * *     ...same command...
+0 0,3,6 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --weekly-scrape --quiet >> logs/cron-output.log 2>&1
+# UTC server (00:30, 18:30, 21:30 UTC = 06:00, 00:00, 03:00 IST), one line:
+# 30 0,18,21 * * * ...same command...

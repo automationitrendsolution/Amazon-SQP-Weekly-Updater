@@ -52,7 +52,7 @@ from app.schema import quote as schema_quote
 from app.spapi import batch_asins
 
 _HELP_EPILOG = """
-examples:
+SQP data (SP-API -> 2024BrandAnalytics):
   python run.py --inspect                                 read-only check of the table and its ASINs
   python run.py --period 2026-10-11 2026-10-17 --dry-run  fetch, validate and preview one week; never writes
   python run.py --period 2026-10-11 2026-10-17 --apply    write that week to MySQL
@@ -60,8 +60,15 @@ examples:
   python run.py --weekly                                  the same, as a dry run
   python run.py --period 2026-10-11 2026-10-17 --dry-run --refetch   ask Amazon again (ignore downloads)
 
+Competitor data (Seller Central web scraping -> BrandAnalytics_Competitor):
+  python run.py --sc-login --terminal                     sign in once on a server (type the OTP)
+  python run.py --weekly-scrape                           scrape up to 400 pages of the oldest unfinished week
+                                                          and store them in the table (cron, 3 times a night)
+  python run.py --sc-capture 2026-10-11 2026-10-17        scrape one week by hand (continues where it stopped)
+  python run.py --sc-load 2026-10-11 2026-10-17           store a week's scraped pages in the table
+
 exit codes:
-  0 success · 1 unexpected · 2 config · 3 MySQL · 5 bad or unavailable week
+  0 success · 1 unexpected · 2 config · 3 MySQL · 4 Seller Central sign-in / page · 5 bad or unavailable week
   6 SP-API failed · 7 malformed report · 11 locked
 """
 
@@ -85,6 +92,10 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--sc-capture", nargs=2, metavar=("START", "END"),
                        help="Seller Central: save the Search Query Details pages (top competitors) of the week's "
                             "keywords to data/sellercentral/; continues where the last part stopped. No database.")
+    modes.add_argument("--weekly-scrape", action="store_true",
+                       help="Cron: web-scrape the competitor data (Seller Central Search Query Details) of the "
+                            "oldest unfinished week, up to --max-pages pages, and store it in "
+                            "BrandAnalytics_Competitor. Same as --sc-night.")
     modes.add_argument("--sc-night", action="store_true",
                        help="Scheduled: the oldest week since SC_COMPETITORS_FROM whose Search Query Details pages "
                             "are not all saved yet: save up to --max-pages of them, then load the week's saved "
@@ -116,7 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if (args.inspect or args.sc_login or args.sc_inspect or args.sc_capture or args.sc_load or args.sc_night) and \
+    if (args.inspect or args.sc_login or args.sc_inspect or args.sc_capture or args.sc_load or args.sc_night
+            or args.weekly_scrape) and \
             (args.dry_run or args.apply):
         parser.error("--inspect and the --sc-* modes cannot be combined with --dry-run/--apply")
     if args.period and not (args.dry_run or args.apply):
@@ -135,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     validate_args(parser, args)
+    if args.weekly_scrape:  # the cron name of --sc-night
+        args.sc_night = True
     started = dt.datetime.now()
     try:
         settings = load_settings(args.env_file)
@@ -213,10 +227,15 @@ def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> 
         missing = sum(not competitors.page_file(folder, a, q).is_file() for a, qs in plan.items() for q in qs)
         if missing:
             break
+        if _loaded_pages(settings, end) < len(list(folder.glob("*.json"))):  # saved but not (all) stored yet
+            logger.info("Search Query Details: week %s..%s is scraped but not fully stored; storing it", start, end)
+            args.sc_capture, args.sc_load = None, [start.isoformat(), end.isoformat()]
+            code, summary = _competitors(args, settings, logger)
+            return code, f"sc-night {summary}"
         end += dt.timedelta(days=7)
     else:
-        logger.info("Search Query Details: every week up to %s is saved; nothing to do", latest)
-        return 0, f"sc-night: all weeks up to {latest} saved"
+        logger.info("Search Query Details: every week up to %s is scraped and stored; nothing to do", latest)
+        return 0, f"sc-night: all weeks up to {latest} scraped and stored"
     logger.info("Search Query Details: week %s..%s, %d pages left; this part opens up to %d", start, end, missing,
                 args.max_pages)
     args.sc_capture, args.sc_load = [start.isoformat(), end.isoformat()], None
@@ -226,6 +245,20 @@ def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> 
         args.sc_capture, args.sc_load = None, [start.isoformat(), end.isoformat()]
         load_code, load_summary = _competitors(args, settings, logger)
     return max(code, load_code), f"sc-night {summary}; {load_summary}"
+
+
+def _loaded_marker(settings: Settings, end: dt.date) -> Path:
+    return settings.state_dir / f"competitors_{end.isoformat()}.json"
+
+
+def _loaded_pages(settings: Settings, end: dt.date) -> int:
+    """How many saved pages of the week were stored in BrandAnalytics_Competitor by the last successful load."""
+    import json
+
+    try:
+        return int(json.loads(_loaded_marker(settings, end).read_text(encoding="utf-8"))["loaded_pages"])
+    except (OSError, ValueError, KeyError):
+        return 0
 
 
 def _competitors(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:
@@ -273,6 +306,9 @@ def _competitors(args: argparse.Namespace, settings: Settings, logger) -> tuple[
             logger.error("%s", line)
         raise PipelineError(f"{len(problems)} row problem(s); nothing loaded")
     result = competitors.load_week(settings, rows, end)
+    _loaded_marker(settings, end).write_text(json.dumps({
+        "loaded_pages": len(pages), "rows": len(rows), "inserted": result["inserted"],
+        "at": f"{dt.datetime.now():%Y-%m-%d %H:%M:%S}"}), encoding="utf-8")
     print(f"{start}..{end}: {len(pages)} pages, {len(rows)} rows -> {competitors.TABLE}: inserted {result['inserted']}, "
           f"already there {result['already_stored']}; table {result['total_before']} -> {result['total_after']} rows")
     return 0, f"sc-load {start}..{end} inserted={result['inserted']} already={result['already_stored']}"

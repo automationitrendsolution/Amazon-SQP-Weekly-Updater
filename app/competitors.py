@@ -264,7 +264,20 @@ def load_week(settings: Settings, rows: list[dict], end: dt.date) -> dict:
 
 
 def page_file(out_dir: Path, asin: str, query: str) -> Path:
-    return out_dir / f"{asin}_{re.sub(r'[^a-z0-9]+', '_', query.lower()).strip('_')[:60]}.json"
+    """Where a page is saved. Keywords that differ only in punctuation or past 60 characters would share a
+    name: the second one gets a short hash, so each keyword has its own file."""
+    import hashlib
+
+    path = out_dir / f"{asin}_{re.sub(r'[^a-z0-9]+', '_', query.lower()).strip('_')[:60]}.json"
+    if path.is_file():
+        try:
+            saved_for = json.loads(path.read_text(encoding="utf-8")).get("search_query")
+        except (OSError, ValueError):
+            saved_for = query
+        if saved_for != query:
+            digest = hashlib.sha1(query.encode("utf-8")).hexdigest()[:8]
+            return path.with_name(f"{path.stem}_{digest}.json")
+    return path
 
 
 def capture_week(settings: Settings, end: dt.date, plan: dict[str, list[str]], out_dir: Path,
