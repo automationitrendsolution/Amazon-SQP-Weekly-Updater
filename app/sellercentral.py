@@ -13,7 +13,9 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import os
 import struct
+import sys
 import time
 from pathlib import Path
 
@@ -43,16 +45,25 @@ def _open(settings: Settings, headless: bool = False):
 
     profile = _profile_dir(settings)
     profile.mkdir(parents=True, exist_ok=True)
+    headless = headless or settings.sc_headless
+    if not headless and _no_screen():
+        log.info("no screen (DISPLAY unset, e.g. cron without xvfb-run): Chrome runs without a window")
+        headless = True
     playwright = sync_playwright().start()
     try:
         context = playwright.chromium.launch_persistent_context(
             str(profile), channel=None if settings.sc_browser_channel == "chromium" else settings.sc_browser_channel,
-            headless=headless or settings.sc_headless, accept_downloads=True,
+            headless=headless, accept_downloads=True,
             viewport={"width": 1440, "height": 900}, args=["--disable-blink-features=AutomationControlled"])
     except Exception:
         playwright.stop()
         raise
     return playwright, context
+
+
+def _no_screen() -> bool:
+    """Linux without an X/Wayland display: a Chrome window cannot open there."""
+    return sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _close(context, playwright) -> None:

@@ -62,8 +62,8 @@ SQP data (SP-API -> 2024BrandAnalytics):
 
 Competitor data (Seller Central web scraping -> BrandAnalytics_Competitor):
   python run.py --sc-login --terminal                     sign in once on a server (type the OTP)
-  python run.py --weekly-scrape                           scrape up to 400 pages of the oldest unfinished week
-                                                          and store them in the table (cron, 3 times a night)
+  python run.py --weekly-scrape                           scrape up to 400 pages of the latest unfinished week
+                                                          (then older ones) and store them (cron, 3 times a night)
   python run.py --sc-capture 2026-10-11 2026-10-17        scrape one week by hand (continues where it stopped)
   python run.py --sc-load 2026-10-11 2026-10-17           store a week's scraped pages in the table
 
@@ -94,12 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
                             "keywords to data/sellercentral/; continues where the last part stopped. No database.")
     modes.add_argument("--weekly-scrape", action="store_true",
                        help="Cron: web-scrape the competitor data (Seller Central Search Query Details) of the "
-                            "oldest unfinished week, up to --max-pages pages, and store it in "
+                            "latest unfinished week, up to --max-pages pages, and store it in "
                             "BrandAnalytics_Competitor. Same as --sc-night.")
     modes.add_argument("--sc-night", action="store_true",
-                       help="Scheduled: the oldest week since SC_COMPETITORS_FROM whose Search Query Details pages "
-                            "are not all saved yet: save up to --max-pages of them, then load the week's saved "
-                            "pages into BrandAnalytics_Competitor (no duplicates).")
+                       help="Scheduled: the latest week in 2024BrandAnalytics whose Search Query Details pages are "
+                            "not all saved yet (then older ones, back to SC_COMPETITORS_FROM): save up to "
+                            "--max-pages of them, then load the week's saved pages into BrandAnalytics_Competitor "
+                            "(no duplicates).")
     modes.add_argument("--sc-load", nargs=2, metavar=("START", "END"),
                        help="Load the week's saved Search Query Details pages into BrandAnalytics_Competitor "
                             "(rows already there are skipped; nothing updated or deleted).")
@@ -210,8 +211,9 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
 
 
 def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:
-    """One scheduled part: the oldest unfinished week gets up to --max-pages new pages, then its saved pages
-    are loaded. The page limit and the load happen even if Amazon stops the part early (pages are kept)."""
+    """One scheduled part: the newest unfinished week (latest in 2024BrandAnalytics first, then older ones back
+    to SC_COMPETITORS_FROM) gets up to --max-pages new pages, then its saved pages are loaded. The page limit
+    and the load happen even if Amazon stops the part early (pages are kept)."""
     from app import competitors
 
     asins = load_asin_list(settings.asin_file).asins
@@ -219,8 +221,8 @@ def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> 
         cur.execute(f"SELECT MAX(reporting_date) AS d FROM {schema_quote(settings.db_table)}")
         latest = cur.fetchone()["d"].date()
         conn.rollback()
-    end = settings.sc_competitors_from + dt.timedelta(days=6)
-    while end <= latest:
+    first = settings.sc_competitors_from + dt.timedelta(days=6)
+    for end in (latest - dt.timedelta(days=7 * i) for i in range((latest - first).days // 7 + 1)):
         start = end - dt.timedelta(days=6)
         plan = {a: q for a, q in competitors.queries_for_week(settings, start, end, asins, top=args.top).items() if q}
         folder = settings.data_dir / "sellercentral" / end.isoformat()
@@ -232,9 +234,9 @@ def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> 
             args.sc_capture, args.sc_load = None, [start.isoformat(), end.isoformat()]
             code, summary = _competitors(args, settings, logger)
             return code, f"sc-night {summary}"
-        end += dt.timedelta(days=7)
     else:
-        logger.info("Search Query Details: every week up to %s is scraped and stored; nothing to do", latest)
+        logger.info("Search Query Details: every week from %s to %s is scraped and stored; nothing to do",
+                    first, latest)
         return 0, f"sc-night: all weeks up to {latest} scraped and stored"
     logger.info("Search Query Details: week %s..%s, %d pages left; this part opens up to %d", start, end, missing,
                 args.max_pages)

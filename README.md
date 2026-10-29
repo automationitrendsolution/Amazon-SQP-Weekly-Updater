@@ -169,9 +169,9 @@ The `POWERBI_DB_*` names used by the daily-data project are accepted as well.
 | --- | --- | --- |
 | `SELLERCENTRAL_EMAIL`, `SELLERCENTRAL_PASSWORD` | – | Seller Central user with Brand Analytics access (`AMAZON_EMAIL` / `AMAZON_PASSWORD` also work) |
 | `SELLERCENTRAL_TOTP_SECRET` | – | Optional authenticator-app key to generate OTPs automatically (only with your team lead's approval) |
-| `SC_COMPETITORS_FROM` | `2026-10-11` | Sunday of the first week the nightly scraper covers |
+| `SC_COMPETITORS_FROM` | `2026-10-11` | Sunday of the oldest week the nightly scraper goes back to (it starts with the latest week) |
 | `SC_BROWSER_CHANNEL` | `chrome` | `chrome` (Google Chrome installed) or `chromium` (Playwright's build; use on Linux) |
-| `SC_HEADLESS` | `false` | `true` runs without a window. On Linux prefer `false` under `xvfb-run` |
+| `SC_HEADLESS` | `false` | `true` runs without a window. On Linux without a screen (cron, no `xvfb-run`) this happens by itself |
 
 ### General
 
@@ -207,7 +207,7 @@ insert and every changed value, old → new) for review. The `--apply` run reuse
 | Task | Command |
 | --- | --- |
 | Sign in once (Windows: Chrome window; server: OTP in the terminal) | `run.py --sc-login` / `run.py --sc-login --terminal` |
-| Scheduled part (cron): web-scrape the next unfinished week, up to 400 pages, and store it | `run.py --weekly-scrape` (same as `--sc-night`) |
+| Scheduled part (cron): web-scrape the latest unfinished week (then older ones), up to 400 pages, and store it | `run.py --weekly-scrape` (same as `--sc-night`) |
 | Save pages of one week by hand (continues where it stopped) | `run.py --sc-capture 2026-10-11 2026-10-17 [--max-pages 400] [--top 100]` |
 | Load a week's saved pages into the table | `run.py --sc-load 2026-10-11 2026-10-17` |
 | Open one Seller Central page and save a screenshot (diagnostics) | `run.py --sc-inspect "<url>"` |

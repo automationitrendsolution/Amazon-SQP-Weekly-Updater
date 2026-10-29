@@ -208,3 +208,29 @@ def test_weekly_scrape_stores_a_scraped_week_that_was_not_stored_yet(monkeypatch
     (folder / "B0TESTAAAA_q.json").write_text('{"search_query": "q"}', encoding="utf-8")
     assert run.main(["--weekly-scrape"]) == 0
     assert calls == [["2026-10-11", "2026-10-17"]]
+
+
+def test_weekly_scrape_starts_with_the_latest_week(monkeypatch):
+    # Weeks 42 and 43 both unfinished: the latest one in 2024BrandAnalytics (18-24 Oct) is scraped first.
+    calls = []
+    monkeypatch.setattr(run, "_competitors", lambda args, s, logger: calls.append(args.sc_capture or args.sc_load)
+                        or (0, "ok"))
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def execute(self, *a): pass
+        def fetchone(self): return {"d": dt.datetime(2026, 10, 24)}
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def cursor(self): return Cursor()
+        def rollback(self): pass
+
+    import contextlib
+    monkeypatch.setattr(run.powerbi, "connect", lambda s, read_only=True: contextlib.nullcontext(Conn()))
+    from app import competitors
+    monkeypatch.setattr(competitors, "queries_for_week", lambda *a, **k: {"B0TESTAAAA": ["q"]})
+    assert run.main(["--weekly-scrape"]) == 0
+    assert calls == [["2026-10-18", "2026-10-24"], ["2026-10-18", "2026-10-24"]]  # capture, then load
