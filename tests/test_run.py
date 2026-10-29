@@ -234,3 +234,50 @@ def test_weekly_scrape_starts_with_the_latest_week(monkeypatch):
     monkeypatch.setattr(competitors, "queries_for_week", lambda *a, **k: {"B0TESTAAAA": ["q"]})
     assert run.main(["--weekly-scrape"]) == 0
     assert calls == [["2026-10-18", "2026-10-24"], ["2026-10-18", "2026-10-24"]]  # capture, then load
+
+
+def test_status_reports_both_tables_week_by_week(monkeypatch, capsys):
+    # Week 43: SP-API written, competitor pages all saved and stored. Week 44: not requested yet.
+    settings = run.load_settings()
+    monkeypatch.setattr(run, "today_in", lambda tz: dt.date(2026, 10, 27))  # newest published: 18-24 Oct
+    monkeypatch.setenv("SC_COMPETITORS_FROM", "2026-10-18")
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def execute(self, sql, params=()): self.sql = sql
+        def fetchone(self):
+            if "HAVING" in self.sql:
+                return {"d": 0}
+            if "BrandAnalytics_Competitor" in self.sql:
+                return {"n": 10, "a": 1, "k": 1}
+            return {"n": 2751, "a": 46}
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def cursor(self): return Cursor()
+        def rollback(self): pass
+
+    import contextlib
+    import json
+    monkeypatch.setattr(run.powerbi, "connect", lambda s, read_only=True: contextlib.nullcontext(Conn()))
+    from app import competitors
+    monkeypatch.setattr(competitors, "queries_for_week", lambda *a, **k: {"B0TESTAAAA": ["q"]})
+    state = settings.state_dir / "sqp_2026-10-18_2026-10-24.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"batches": {}, "written": {"at": "2026-10-27 10:26:56"}}), encoding="utf-8")
+    folder = settings.data_dir / "sellercentral" / "2026-10-24"
+    folder.mkdir(parents=True)
+    (folder / "B0TESTAAAA_q.json").write_text('{"search_query": "q"}', encoding="utf-8")
+    run._loaded_marker(settings, dt.date(2026, 10, 24)).write_text(
+        json.dumps({"loaded_pages": 1, "rows": 10, "inserted": 10, "at": "2026-10-29 06:00:00"}), encoding="utf-8")
+    assert run.main(["--status"]) == 0
+    out = capsys.readouterr().out
+    assert "Week 43 2026" in out and "OK - written and verified 2026-10-27 10:26:56" in out
+    assert "OK - all 1 pages scraped and stored" in out and "All weeks complete." in out
+
+
+def test_status_is_read_only():
+    with pytest.raises(SystemExit):
+        parse(["--status", "--apply"])

@@ -210,6 +210,13 @@ insert and every changed value, old → new) for review. The `--apply` run reuse
 | Scheduled part (cron): web-scrape the latest unfinished week (then older ones), up to 400 pages, and store it | `run.py --weekly-scrape` (same as `--sc-night`) |
 | Save pages of one week by hand (continues where it stopped) | `run.py --sc-capture 2026-10-11 2026-10-17 [--max-pages 400] [--top 100]` |
 | Load a week's saved pages into the table | `run.py --sc-load 2026-10-11 2026-10-17` |
+
+### Checking what is stored (both tables)
+
+`run.py --status` is read-only. For each week from the newest Amazon has published back to
+`SC_COMPETITORS_FROM`, it shows the rows, ASINs and duplicates in `2024BrandAnalytics` and in
+`BrandAnalytics_Competitor`, with a verdict per table: `OK`, `WAITING` (reports in Amazon's queue),
+`SCRAPING` (pages left), `SCRAPED` (stored by the next run) or `NOT YET`, plus any `WARNING`.
 | Open one Seller Central page and save a screenshot (diagnostics) | `run.py --sc-inspect "<url>"` |
 
 ### Other

@@ -67,6 +67,9 @@ Competitor data (Seller Central web scraping -> BrandAnalytics_Competitor):
   python run.py --sc-capture 2026-10-11 2026-10-17        scrape one week by hand (continues where it stopped)
   python run.py --sc-load 2026-10-11 2026-10-17           store a week's scraped pages in the table
 
+Check what is stored (read-only, both tables, week by week):
+  python run.py --status
+
 exit codes:
   0 success · 1 unexpected · 2 config · 3 MySQL · 4 Seller Central sign-in / page · 5 bad or unavailable week
   6 SP-API failed · 7 malformed report · 11 locked
@@ -83,6 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"amazon-sqp-weekly-updater {__version__}")
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--inspect", action="store_true", help="Inspect table and ASINs (read-only).")
+    modes.add_argument("--status", action="store_true",
+                       help="Read-only: for each week since SC_COMPETITORS_FROM, what is stored in 2024BrandAnalytics "
+                            "(SP-API) and BrandAnalytics_Competitor (scraping), and whether it is complete.")
     modes.add_argument("--period", nargs=2, metavar=("START", "END"), help="Sunday and Saturday, YYYY-MM-DD.")
     modes.add_argument("--weekly", action="store_true", help="Process the latest completed, available week.")
     modes.add_argument("--sc-login", action="store_true",
@@ -128,8 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if (args.inspect or args.sc_login or args.sc_inspect or args.sc_capture or args.sc_load or args.sc_night
-            or args.weekly_scrape) and \
+    if (args.inspect or args.status or args.sc_login or args.sc_inspect or args.sc_capture or args.sc_load
+            or args.sc_night or args.weekly_scrape) and \
             (args.dry_run or args.apply):
         parser.error("--inspect and the --sc-* modes cannot be combined with --dry-run/--apply")
     if args.period and not (args.dry_run or args.apply):
@@ -182,6 +188,8 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
         code, lines = powerbi.inspection(settings, load_asin_list(settings.asin_file))
         print("\n".join(lines))
         return code, "inspected" if code == 0 else "no ASIN column"
+    if args.status:
+        return _status(settings)
     if args.sc_login:
         from app import sellercentral
 
@@ -247,6 +255,91 @@ def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> 
         args.sc_capture, args.sc_load = None, [start.isoformat(), end.isoformat()]
         load_code, load_summary = _competitors(args, settings, logger)
     return max(code, load_code), f"sc-night {summary}; {load_summary}"
+
+
+def _status(settings: Settings) -> tuple[int, str]:
+    """--status (read-only): each week from the newest Amazon has published back to SC_COMPETITORS_FROM, with
+    what 2024BrandAnalytics and BrandAnalytics_Competitor hold for it and whether that week is complete."""
+    import json
+
+    from app import competitors
+
+    asins = load_asin_list(settings.asin_file).asins
+    table, comp = schema_quote(settings.db_table), f"`{competitors.TABLE}`"
+    first = settings.sc_competitors_from + dt.timedelta(days=6)
+    _, newest = latest_completed_week(today_in(settings.timezone), settings.availability_lag_days)
+    weeks = [newest - dt.timedelta(days=7 * i) for i in range((newest - first).days // 7 + 1)]
+    lines, open_items = [], 0
+    for end in weeks:
+        start, day = end - dt.timedelta(days=6), dt.datetime.combine(end, dt.time())
+        label = powerbi.week_label(end)
+        with powerbi.connect(settings) as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS n, COUNT(DISTINCT asin) AS a FROM {table} WHERE reporting_date = %s", (day,))
+            sqp = cur.fetchone()
+            cur.execute(f"SELECT COUNT(*) AS d FROM (SELECT 1 FROM {table} WHERE reporting_date = %s "
+                        "GROUP BY asin, search_query HAVING COUNT(*) > 1) x", (day,))
+            sqp_dups = cur.fetchone()["d"]
+            week_num = int(label.split()[1])
+            cur.execute(f"SELECT COUNT(*) AS n, COUNT(DISTINCT `ASIN`) AS a, COUNT(DISTINCT `ASIN`, `Keyword`) AS k "
+                        f"FROM {comp} WHERE `Year` = %s AND `week_num` = %s", (end.year, week_num))
+            cmp = cur.fetchone()
+            cur.execute(f"SELECT COUNT(*) AS d FROM (SELECT 1 FROM {comp} WHERE `Year` = %s AND `week_num` = %s "
+                        "GROUP BY `ASIN`, `Keyword`, `Comp ASIN` HAVING COUNT(*) > 1) x", (end.year, week_num))
+            cmp_dups = cur.fetchone()["d"]
+            conn.rollback()
+
+        state = spapi.load_state(spapi.state_file(settings.state_dir, start, end))
+        pending = [b for b in state.get("batches", {}).values() if not b.get("document_id")]
+        if state.get("written"):
+            sqp_verdict = f"OK - written and verified {state['written']['at']}"
+        elif state.get("manual"):
+            sqp_verdict = f"OK - written by hand {state['manual']['at']} ({state['manual']['how']})"
+        elif pending:
+            sqp_verdict = f"WAITING - {len(pending)} of {len(state['batches'])} report(s) still in Amazon's queue"
+        elif sqp["n"]:
+            sqp_verdict = "OK - in the table (written before this server's records)"
+        else:
+            sqp_verdict = "NOT YET - not requested (the Monday cron run asks for it)"
+        if sqp_dups:
+            sqp_verdict += f"; WARNING {sqp_dups} duplicated (ASIN, query)"
+        open_items += not sqp_verdict.startswith("OK") or bool(sqp_dups)
+
+        plan = competitors.queries_for_week(settings, start, end, asins, top=100) if sqp["n"] else {}
+        folder = settings.data_dir / "sellercentral" / end.isoformat()
+        planned = sum(len(q) for q in plan.values())
+        saved = sum(competitors.page_file(folder, a, q).is_file() for a, qs in plan.items() for q in qs)
+        files = len(list(folder.glob("*.json"))) if folder.is_dir() else 0
+        try:
+            marker = json.loads(_loaded_marker(settings, end).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            marker = {}
+        if not planned:
+            cmp_verdict = "NOT YET - needs the week in 2024BrandAnalytics first"
+        elif saved < planned:
+            cmp_verdict = f"SCRAPING - {saved} of {planned} pages saved, {planned - saved} left"
+        elif marker.get("loaded_pages", 0) < files:
+            cmp_verdict = "SCRAPED - not all stored yet (the next --weekly-scrape stores it)"
+        else:
+            cmp_verdict = f"OK - all {planned} pages scraped and stored"
+        if marker and cmp["n"] < marker.get("rows", 0):
+            cmp_verdict += f"; WARNING table has {cmp['n']} rows, the last load had {marker['rows']}"
+        if cmp_dups:
+            cmp_verdict += f"; WARNING {cmp_dups} duplicated (ASIN, keyword, competitor)"
+        open_items += not cmp_verdict.startswith("OK") or "WARNING" in cmp_verdict
+
+        last_load = f", last stored {marker['at']} ({marker['loaded_pages']} pages)" if marker else ""
+        lines += [
+            f"{label} {end.year}  {start}..{end}",
+            f"  2024BrandAnalytics (SP-API):  {sqp['n']} rows, {sqp['a']} of {len(asins)} ASINs, {sqp_dups} duplicates",
+            f"    {sqp_verdict}",
+            f"  BrandAnalytics_Competitor:    {cmp['n']} rows, {cmp['a']} ASINs, {cmp['k']} keywords, "
+            f"{cmp_dups} duplicates{last_load}",
+            f"    {cmp_verdict}",
+            "",
+        ]
+    lines.append("All weeks complete." if not open_items else f"{open_items} item(s) not complete yet (see above).")
+    print("\n".join(lines))
+    return 0, f"status: {len(weeks)} week(s), {open_items} not complete"
 
 
 def _loaded_marker(settings: Settings, end: dt.date) -> Path:
