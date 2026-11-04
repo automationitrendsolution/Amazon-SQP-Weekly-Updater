@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from .config import Settings
-from .exceptions import MalformedReport
+from .exceptions import MalformedReport, SpApiError
 from .logging_config import get_logger
 from .spapi import REPORTS_PATH, ReportFailed, SpApiClient, load_state, save_state
 
@@ -46,6 +46,11 @@ COLUMNS = ("search_frequency_rank", "search_term",
 
 class NotPublished(Exception):
     """Amazon has no data for the day yet: stop, the next run asks again."""
+
+
+class Throttled(Exception):
+    """Amazon refused a new report request (HTTP 429): the app's createReport quota, about one a minute and
+    shared with the app's other programs, is used up for now."""
 
 
 def iter_records(chunks: Iterable[bytes], gzipped: bool) -> Iterator[dict]:
@@ -146,7 +151,12 @@ def request_day(client: SpApiClient, settings: Settings, day: dt.date) -> str:
         return report_id
     body = {"reportType": REPORT_TYPE, "marketplaceIds": [settings.marketplace_id],
             "dataStartTime": day.isoformat(), "dataEndTime": day.isoformat(), "reportOptions": {"reportPeriod": "DAY"}}
-    report_id = client._api("POST", f"{REPORTS_PATH}/reports", data=json.dumps(body))["reportId"]
+    try:
+        report_id = client._api("POST", f"{REPORTS_PATH}/reports", data=json.dumps(body))["reportId"]
+    except SpApiError as exc:
+        if "HTTP 429" in str(exc):
+            raise Throttled(str(day)) from None
+        raise
     save_state(state_path, {"report_id": report_id})
     log.info("Top Search Terms %s: requested report %s", day, report_id)
     return report_id

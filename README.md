@@ -76,7 +76,7 @@ Days with no rows in day_wise_top_search (from 2026-04-29, oldest first)
       │
       ▼
 SP-API ────────── one Top Search Terms report per day (all of Amazon.com, ~100 MB, ~1.3 million rows),
-      │           ten days requested at a time, ~7 min each; read as a stream, never held in memory
+      │           up to ten requested ahead (Amazon allows ~1 new request a minute), ~7 min each; read as a stream, never held in memory
       ▼
 Filter ────────── search terms where one of the top 3 clicked products is ours (config/asins.txt)
       │           or its title starts with EcoNour: ~80 a day

@@ -99,6 +99,34 @@ def test_run_stores_days_in_order_and_stops_at_a_day_amazon_has_not_published(mo
     assert "has not published this day yet" in capsys.readouterr().out
 
 
+def test_a_refused_report_request_waits_and_collects_the_reports_already_asked_for(monkeypatch):
+    import time
+
+    import run
+
+    days = [DAY + dt.timedelta(days=i) for i in range(4)]
+    order, refusals, sleeps = [], iter([False, False, True, True, False, False]), []
+    monkeypatch.setattr(top_search, "stored_days", lambda settings, first: set())
+    monkeypatch.setattr(top_search, "days_due", lambda stored, first, last: list(days))
+
+    def request(client, settings, day):
+        if next(refusals):
+            order.append(f"refused {day.day}")
+            raise top_search.Throttled(str(day))
+        order.append(f"request {day.day}")
+
+    monkeypatch.setattr(top_search, "request_day", request)
+    monkeypatch.setattr(top_search, "fetch_day", lambda c, s, day, *a: order.append(f"fetch {day.day}") or [])
+    monkeypatch.setattr(top_search, "load_day", lambda settings, rows, day: {"inserted": 0})
+    monkeypatch.setattr(run.spapi, "SpApiClient", lambda settings: _Client())
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    assert run.main(["--top-search", "--apply", "--no-lock"]) == 0
+    # day 3 is refused: days 1-2 are collected meanwhile, then it waits once and asks again
+    assert order == ["request 29", "request 30", "refused 1", "fetch 29", "refused 1", "fetch 30",
+                     "request 1", "request 2", "fetch 1", "fetch 2"]
+    assert sleeps == []
+
+
 def test_a_dry_run_never_stores(monkeypatch):
     import run
 

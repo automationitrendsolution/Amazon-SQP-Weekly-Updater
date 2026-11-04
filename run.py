@@ -51,6 +51,10 @@ from app.schema import canonical_fields
 from app.schema import quote as schema_quote
 from app.spapi import batch_asins
 
+# --top-search: wait between refused report requests, and give up after this long without one accepted.
+TOP_SEARCH_THROTTLED_WAIT = 90
+TOP_SEARCH_THROTTLED_GIVE_UP = 30 * 60
+
 _HELP_EPILOG = """
 SQP data (SP-API -> 2024BrandAnalytics):
   python run.py --inspect                                 read-only check of the table and its ASINs
@@ -240,9 +244,9 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
 
 
 def _top_search(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:
-    """Days with no rows in day_wise_top_search, oldest first (up to --max-days): request their reports ten at
-    a time, keep the brand's search terms, and store them with --apply. Stops at the first day Amazon has not
-    published yet (the next run asks again)."""
+    """Days with no rows in day_wise_top_search, oldest first (up to --max-days): request their reports (up to
+    ten ahead, as fast as Amazon's quota allows), keep the brand's search terms, and store them with --apply.
+    Stops at the first day Amazon has not published yet (the next run asks again)."""
     import dataclasses
     import time
 
@@ -258,29 +262,43 @@ def _top_search(args: argparse.Namespace, settings: Settings, logger) -> tuple[i
     client = spapi.SpApiClient(dataclasses.replace(settings,
                                                    poll_interval_seconds=min(settings.poll_interval_seconds, 60)))
     fetched, inserted, waiting = [], 0, None
-    for i in range(0, len(due), 10):
-        window = due[i:i + 10]
-        for day in window:  # ask for the window's reports first, then collect them in order
-            top_search.request_day(client, settings, day)
-        deadline = time.monotonic() + 3 * 60 * 60
-        for day in window:
+    queue, ahead, throttled_since = list(due), [], None
+    while queue or ahead:
+        # Keep up to 10 reports requested ahead. Amazon allows about one new request a minute (shared with the
+        # app's other programs): when it refuses, collect the reports already asked for and ask again later.
+        while queue and len(ahead) < 10:
             try:
-                rows = top_search.fetch_day(client, settings, day, asins, settings.top_search_brand, deadline)
-            except top_search.NotPublished:
-                waiting = day
+                top_search.request_day(client, settings, queue[0])
+            except top_search.Throttled:
+                throttled_since = throttled_since or time.monotonic()
+                if time.monotonic() - throttled_since > TOP_SEARCH_THROTTLED_GIVE_UP:
+                    raise spapi.SpApiError(f"Amazon refused new Top Search Terms reports (HTTP 429) for "
+                                           f"{TOP_SEARCH_THROTTLED_GIVE_UP // 60} minutes; the next run continues "
+                                           f"from {queue[0]}") from None
                 break
-            fetched.append(day)
-            if args.apply:
-                inserted += top_search.load_day(settings, rows, day)["inserted"]
-                print(f"{day}: {len(rows)} search terms -> {top_search.TABLE}")
-            else:
-                print(f"{day}: {len(rows)} search terms (dry run, not stored); top 3:")
-                for r in rows[:3]:
-                    print(f"    #{r['search_frequency_rank']} {r['search_term']!r}: {r['top_clicked_product_1_asin']} "
-                          f"{r['top_clicked_product_1_click_share']}% click / "
-                          f"{r['top_clicked_product_1_conversion_share']}% conversion")
-        if waiting:
+            throttled_since = None
+            ahead.append(queue.pop(0))
+        if not ahead:
+            logger.info("Amazon's report quota is used up; asking again in %ds", TOP_SEARCH_THROTTLED_WAIT)
+            time.sleep(TOP_SEARCH_THROTTLED_WAIT)
+            continue
+        day = ahead.pop(0)
+        try:
+            rows = top_search.fetch_day(client, settings, day, asins, settings.top_search_brand,
+                                        time.monotonic() + 3 * 60 * 60)
+        except top_search.NotPublished:
+            waiting = day
             break
+        fetched.append(day)
+        if args.apply:
+            inserted += top_search.load_day(settings, rows, day)["inserted"]
+            print(f"{day}: {len(rows)} search terms -> {top_search.TABLE}", flush=True)
+        else:
+            print(f"{day}: {len(rows)} search terms (dry run, not stored); top 3:")
+            for r in rows[:3]:
+                print(f"    #{r['search_frequency_rank']} {r['search_term']!r}: {r['top_clicked_product_1_asin']} "
+                      f"{r['top_clicked_product_1_click_share']}% click / "
+                      f"{r['top_clicked_product_1_conversion_share']}% conversion")
     if waiting:
         print(f"{waiting}: Amazon has not published this day yet; the next run asks again")
     span = f"{fetched[0]}..{fetched[-1]}" if fetched else "none"
