@@ -124,6 +124,8 @@ class Settings:
     # headless (no window) for a server without a display, unless it runs under xvfb-run.
     sc_browser_channel: str = "chrome"
     sc_headless: bool = False
+    # Top Search Terms (app/top_search.py): search terms whose top clicked products include this brand's
+    top_search_brand: str = "EcoNour"
 
     @property
     def report_dir(self) -> Path:
@@ -196,4 +198,5 @@ def load_settings(env_file: Path | None = None) -> Settings:
         sc_competitors_from=_env_date("SC_COMPETITORS_FROM", dt.date(2026, 10, 11)),
         sc_browser_channel=_env("SC_BROWSER_CHANNEL", "chrome").lower(),
         sc_headless=_env("SC_HEADLESS", "false").lower() in ("1", "true", "yes"),
+        top_search_brand=_env("TOP_SEARCH_BRAND", "EcoNour"),
     )

@@ -13,3 +13,8 @@ MAILTO=""
 0 0,3,6 * * * cd /data/cron/amazon-sqp-weekly-updater && flock -n logs/.sc-cron.lock timeout 3h15m xvfb-run -a /root/.local/bin/uv run --no-sync python run.py --weekly-scrape --quiet >> logs/cron-output.log 2>&1
 # UTC server (00:30, 18:30, 21:30 UTC = 06:00, 00:00, 03:00 IST), one line:
 # 30 0,18,21 * * * ...same command...
+
+# 3) Top Search Terms (SP-API, daily reports) -> day_wise_top_search: once a day 18:00 IST, up to 30 days per run
+#    (catches up from 2026-04-29 first). Its own lock: never collides with 1) or 2).
+0 18 * * * cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --top-search --apply --quiet >> logs/cron-output.log 2>&1
+# UTC server:  30 12 * * * ...same command...

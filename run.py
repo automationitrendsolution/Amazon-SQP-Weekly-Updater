@@ -67,6 +67,11 @@ Competitor data (Seller Central web scraping -> BrandAnalytics_Competitor):
   python run.py --sc-capture 2026-10-11 2026-10-17        scrape one week by hand (continues where it stopped)
   python run.py --sc-load 2026-10-11 2026-10-17           store a week's scraped pages in the table
 
+Top Search Terms (SP-API, one report per day -> day_wise_top_search, EcoNour search terms):
+  python run.py --top-search                              fetch the next days due and preview them; never writes
+  python run.py --top-search --apply                      the same, and store them (cron, once a day)
+  python run.py --top-search --apply --max-days 200       catch up many days in one run
+
 Check what is stored (read-only, both tables, week by week):
   python run.py --status
 
@@ -107,6 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
                             "not all saved yet (then older ones, back to SC_COMPETITORS_FROM): save up to "
                             "--max-pages of them, then load the week's saved pages into BrandAnalytics_Competitor "
                             "(no duplicates).")
+    modes.add_argument("--top-search", action="store_true",
+                       help="SP-API Top Search Terms, day by day from --from (default 2026-04-29) to the latest day "
+                            "Amazon has: each day with no rows in day_wise_top_search is requested and its EcoNour "
+                            "search terms kept; stored with --apply (dry run otherwise).")
     modes.add_argument("--sc-load", nargs=2, metavar=("START", "END"),
                        help="Load the week's saved Search Query Details pages into BrandAnalytics_Competitor "
                             "(rows already there are skipped; nothing updated or deleted).")
@@ -116,6 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="With --sc-capture: keywords per ASIN, highest search volume first (default 100 = all).")
     parser.add_argument("--max-pages", type=int, default=400, metavar="N",
                         help="With --sc-capture: pages to open in this run (default 400, about 3 hours).")
+    parser.add_argument("--max-days", type=int, default=30, metavar="N",
+                        help="With --top-search: days to fetch in this run (default 30, oldest first).")
+    parser.add_argument("--from", dest="from_day", metavar="DATE",
+                        help="With --top-search: first day to fill (default 2026-04-29).")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--dry-run", action="store_true", help="Fetch, validate and preview; never writes.")
     action.add_argument("--apply", action="store_true", help="Write the validated changes to MySQL.")
@@ -144,6 +157,10 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--downloaded-only and --no-insert are for a manual --period run only")
     if args.downloaded_only and args.refetch:
         parser.error("--downloaded-only cannot be combined with --refetch")
+    if (args.max_days != 30 or args.from_day) and not args.top_search:
+        parser.error("--max-days and --from are for --top-search")
+    if args.max_days < 1:
+        parser.error("--max-days must be at least 1")
     if args.weekly and not (args.dry_run or args.apply):
         # Scheduled runs must say --apply explicitly; anything else previews.
         args.dry_run = True
@@ -208,6 +225,10 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
                 return _competitors_night(args, settings, logger)
             return _competitors(args, settings, logger)
 
+    if args.top_search:
+        with RunLock(settings.log_dir / ".top_search.lock"):  # its own lock: runs beside the SQP and scraping jobs
+            return _top_search(args, settings, logger)
+
     lock = RunLock(settings.log_dir / ".run.lock") if not args.no_lock else None
     if lock:
         lock.__enter__()
@@ -216,6 +237,61 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
     finally:
         if lock:
             lock.__exit__(None, None, None)
+
+
+def _top_search(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:
+    """Days with no rows in day_wise_top_search, oldest first (up to --max-days): request their reports ten at
+    a time, keep the brand's search terms, and store them with --apply. Stops at the first day Amazon has not
+    published yet (the next run asks again)."""
+    import dataclasses
+    import time
+
+    from app import top_search
+
+    asins = set(load_asin_list(settings.asin_file).asins)
+    first = parse_date(args.from_day) if args.from_day else top_search.FIRST_DAY
+    yesterday = today_in(settings.timezone) - dt.timedelta(days=1)
+    due = top_search.days_due(top_search.stored_days(settings, first), first, yesterday)[:args.max_days]
+    if not due:
+        print(f"{top_search.TABLE}: every day from {first} to {yesterday} is stored")
+        return 0, f"top-search nothing due ({first}..{yesterday})"
+    client = spapi.SpApiClient(dataclasses.replace(settings,
+                                                   poll_interval_seconds=min(settings.poll_interval_seconds, 60)))
+    fetched, inserted, waiting = [], 0, None
+    for i in range(0, len(due), 10):
+        window = due[i:i + 10]
+        for day in window:  # ask for the window's reports first, then collect them in order
+            top_search.request_day(client, settings, day)
+        deadline = time.monotonic() + 3 * 60 * 60
+        for day in window:
+            try:
+                rows = top_search.fetch_day(client, settings, day, asins, settings.top_search_brand, deadline)
+            except top_search.NotPublished:
+                waiting = day
+                break
+            fetched.append(day)
+            if args.apply:
+                inserted += top_search.load_day(settings, rows, day)["inserted"]
+                print(f"{day}: {len(rows)} search terms -> {top_search.TABLE}")
+            else:
+                print(f"{day}: {len(rows)} search terms (dry run, not stored); top 3:")
+                for r in rows[:3]:
+                    print(f"    #{r['search_frequency_rank']} {r['search_term']!r}: {r['top_clicked_product_1_asin']} "
+                          f"{r['top_clicked_product_1_click_share']}% click / "
+                          f"{r['top_clicked_product_1_conversion_share']}% conversion")
+        if waiting:
+            break
+    if waiting:
+        print(f"{waiting}: Amazon has not published this day yet; the next run asks again")
+    span = f"{fetched[0]}..{fetched[-1]}" if fetched else "none"
+    summary = f"top-search days={len(fetched)} ({span})"
+    if args.apply:
+        left = len(top_search.days_due(top_search.stored_days(settings, first), first, yesterday))
+        print(f"{len(fetched)} day(s) stored ({span}), {inserted} rows inserted; {left} day(s) still due")
+        summary += f" inserted={inserted} left={left}"
+    else:
+        summary += " dry-run"
+    return 0, summary + (f" waiting={waiting}" if waiting else "")
 
 
 def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:

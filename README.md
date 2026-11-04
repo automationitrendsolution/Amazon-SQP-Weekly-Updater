@@ -69,6 +69,24 @@ Load ──────────── new rows into BrandAnalytics_Competito
 - Scheduled runs **never log in**: when the saved session has expired they stop, so Amazon never sends an
   unexpected OTP. A person signs in again once.
 
+### 3. Daily Top Search Terms (SP-API)
+
+```
+Days with no rows in day_wise_top_search (from 2026-04-29, oldest first)
+      │
+      ▼
+SP-API ────────── one Top Search Terms report per day (all of Amazon.com, ~100 MB, ~1.3 million rows),
+      │           ten days requested at a time, ~7 min each; read as a stream, never held in memory
+      ▼
+Filter ────────── search terms where one of the top 3 clicked products is ours (config/asins.txt)
+      │           or its title starts with EcoNour: ~80 a day
+      ▼
+Load ──────────── new rows into day_wise_top_search (search terms already stored for the day are skipped)
+```
+
+- Once a day by cron; the first runs catch up from 2026-04-29. A day Amazon has not published yet stops the
+  run, and the next run asks again.
+
 ---
 
 ## Requirements
@@ -172,6 +190,7 @@ The `POWERBI_DB_*` names used by the daily-data project are accepted as well.
 | `SC_COMPETITORS_FROM` | `2026-10-11` | Sunday of the oldest week the nightly scraper goes back to (it starts with the latest week) |
 | `SC_BROWSER_CHANNEL` | `chrome` | `chrome` (Google Chrome installed) or `chromium` (Playwright's build; use on Linux) |
 | `SC_HEADLESS` | `false` | `true` runs without a window. On Linux without a screen (cron, no `xvfb-run`) this happens by itself |
+| `TOP_SEARCH_BRAND` | `EcoNour` | Top Search Terms: keep search terms whose top 3 clicked products include this brand (or our ASINs) |
 
 ### General
 
@@ -210,6 +229,19 @@ insert and every changed value, old → new) for review. The `--apply` run reuse
 | Scheduled part (cron): web-scrape the latest unfinished week (then older ones), up to 400 pages, and store it | `run.py --weekly-scrape` (same as `--sc-night`) |
 | Save pages of one week by hand (continues where it stopped) | `run.py --sc-capture 2026-10-11 2026-10-17 [--max-pages 400] [--top 100]` |
 | Load a week's saved pages into the table | `run.py --sc-load 2026-10-11 2026-10-17` |
+| Open one Seller Central page and save a screenshot (diagnostics) | `run.py --sc-inspect "<url>"` |
+
+### Top Search Terms (SP-API → `day_wise_top_search`)
+
+| Task | Command |
+| --- | --- |
+| Preview the next days due (fetch and filter, never writes) | `run.py --top-search` |
+| Scheduled (cron, daily): fetch and store up to 30 days due | `run.py --top-search --apply` |
+| Catch up many days in one run | `run.py --top-search --apply --max-days 200` |
+| Start from another day | add `--from 2026-05-01` |
+
+Each day's kept search terms are saved to `data/top_search/top_search_<day>.json`; an `--apply` after a
+preview stores them without asking Amazon again.
 
 ### Checking what is stored (both tables)
 
@@ -217,7 +249,6 @@ insert and every changed value, old → new) for review. The `--apply` run reuse
 `SC_COMPETITORS_FROM`, it shows the rows, ASINs and duplicates in `2024BrandAnalytics` and in
 `BrandAnalytics_Competitor`, with a verdict per table: `OK`, `WAITING` (reports in Amazon's queue),
 `SCRAPING` (pages left), `SCRAPED` (stored by the next run) or `NOT YET`, plus any `WARNING`.
-| Open one Seller Central page and save a screenshot (diagnostics) | `run.py --sc-inspect "<url>"` |
 
 ### Other
 
@@ -259,6 +290,13 @@ MAILTO=""
 
 `flock` keeps two scraper parts from overlapping, `timeout` ends a part that hangs, and `xvfb-run` gives the
 browser a virtual screen.
+
+Top Search Terms, once a day at 18:00 IST (its own lock, so it never collides with the jobs above):
+
+```cron
+0 18 * * * cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --top-search --apply --quiet >> logs/cron-output.log 2>&1
+# UTC server: 30 12 * * * ...same command...
+```
 
 ### Windows Task Scheduler (alternative)
 
@@ -321,6 +359,23 @@ The existing table and its format are kept: one row per competitor ASIN.
 - A row whose **(week, ASIN, keyword, competitor ASIN)** is already stored is skipped, so loads can be
   repeated safely. Existing rows are never updated or deleted.
 - For broad keywords Amazon's top results can be videos (e.g. "Cars"); their brand and price are empty.
+
+### `day_wise_top_search`
+
+The existing table and its format are kept: one row per search term and day.
+
+| Column | Value |
+| --- | --- |
+| `search_frequency_rank`, `search_term` | Amazon's rank of the search term that day, and the term |
+| `top_clicked_product_1..3_asin`, `_title` | Top 3 clicked products, in click share order |
+| `top_clicked_product_1..3_click_share`, `_conversion_share` | Percent with 2 decimals (`9.44` = 9.44 %) |
+| `reporting_date` | The day |
+| `top_clicked_brand_1..3`, `top_clicked_category_1..3` | Empty (NULL): the SP-API report has no brands or categories |
+
+- Rows up to 2026-04-28 came from Seller Central downloads filtered by brand (EcoNour among the top 3
+  clicked *brands*). The SP-API has only the top 3 *products*, so it finds about 80–85 % of those terms
+  (`TOP_SEARCH_BRAND` sets the brand; our ASINs always count).
+- Search terms already stored for a day are skipped; existing rows are never updated or deleted.
 
 ---
 
