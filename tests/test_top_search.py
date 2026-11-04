@@ -127,6 +127,26 @@ def test_a_refused_report_request_waits_and_collects_the_reports_already_asked_f
     assert sleeps == []
 
 
+def test_storing_a_day_waits_while_mysql_refuses_connections(monkeypatch):
+    import time
+
+    import run
+    from app.exceptions import DatabaseError
+
+    answers, sleeps = [DatabaseError("MySQL connection failed: refused")] * 2 + [{"inserted": 5}], []
+
+    def load(settings, rows, day):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(top_search, "load_day", load)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    assert run._load_waiting_for_mysql(None, [], DAY, run.get_logger("test")) == {"inserted": 5}
+    assert sleeps == [run.TOP_SEARCH_DB_WAIT] * 2
+
+
 def test_a_dry_run_never_stores(monkeypatch):
     import run
 

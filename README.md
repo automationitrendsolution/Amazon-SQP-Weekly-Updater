@@ -84,7 +84,8 @@ Filter ────────── search terms where one of the top 3 clicke
 Load ──────────── new rows into day_wise_top_search (search terms already stored for the day are skipped)
 ```
 
-- Once a day by cron; the first runs catch up from 2026-04-29. A day Amazon has not published yet stops the
+- Every Wednesday by cron: each run stores every day still missing up to the day before (Wednesday-Tuesday
+  of the week); the first runs catch up from 2026-04-29. A day Amazon has not published yet stops the
   run, and the next run asks again.
 
 ---
@@ -236,7 +237,7 @@ insert and every changed value, old → new) for review. The `--apply` run reuse
 | Task | Command |
 | --- | --- |
 | Preview the next days due (fetch and filter, never writes) | `run.py --top-search` |
-| Scheduled (cron, daily): fetch and store up to 30 days due | `run.py --top-search --apply` |
+| Scheduled (cron, every Wednesday): fetch and store every day due, up to 30 | `run.py --top-search --apply` |
 | Catch up many days in one run | `run.py --top-search --apply --max-days 200` |
 | Start from another day | add `--from 2026-05-01` |
 
@@ -291,11 +292,11 @@ MAILTO=""
 `flock` keeps two scraper parts from overlapping, `timeout` ends a part that hangs, and `xvfb-run` gives the
 browser a virtual screen.
 
-Top Search Terms, once a day at 18:00 IST (its own lock, so it never collides with the jobs above):
+Top Search Terms, every Wednesday at 18:00 IST (its own lock, so it never collides with the jobs above):
 
 ```cron
-0 18 * * * cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --top-search --apply --quiet >> logs/cron-output.log 2>&1
-# UTC server: 30 12 * * * ...same command...
+0 18 * * 3 cd /data/cron/amazon-sqp-weekly-updater && /root/.local/bin/uv run --no-sync python run.py --top-search --apply --quiet >> logs/cron-output.log 2>&1
+# UTC server: 30 12 * * 3 ...same command...
 ```
 
 ### Windows Task Scheduler (alternative)

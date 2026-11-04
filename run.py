@@ -54,6 +54,9 @@ from app.spapi import batch_asins
 # --top-search: wait between refused report requests, and give up after this long without one accepted.
 TOP_SEARCH_THROTTLED_WAIT = 90
 TOP_SEARCH_THROTTLED_GIVE_UP = 30 * 60
+# --top-search: MySQL unreachable while storing a day (it has refused connections for a while at times).
+TOP_SEARCH_DB_WAIT = 120
+TOP_SEARCH_DB_ATTEMPTS = 30
 
 _HELP_EPILOG = """
 SQP data (SP-API -> 2024BrandAnalytics):
@@ -73,7 +76,7 @@ Competitor data (Seller Central web scraping -> BrandAnalytics_Competitor):
 
 Top Search Terms (SP-API, one report per day -> day_wise_top_search, EcoNour search terms):
   python run.py --top-search                              fetch the next days due and preview them; never writes
-  python run.py --top-search --apply                      the same, and store them (cron, once a day)
+  python run.py --top-search --apply                      the same, and store them (cron, every Wednesday)
   python run.py --top-search --apply --max-days 200       catch up many days in one run
 
 Check what is stored (read-only, both tables, week by week):
@@ -291,7 +294,7 @@ def _top_search(args: argparse.Namespace, settings: Settings, logger) -> tuple[i
             break
         fetched.append(day)
         if args.apply:
-            inserted += top_search.load_day(settings, rows, day)["inserted"]
+            inserted += _load_waiting_for_mysql(settings, rows, day, logger)["inserted"]
             print(f"{day}: {len(rows)} search terms -> {top_search.TABLE}", flush=True)
         else:
             print(f"{day}: {len(rows)} search terms (dry run, not stored); top 3:")
@@ -310,6 +313,24 @@ def _top_search(args: argparse.Namespace, settings: Settings, logger) -> tuple[i
     else:
         summary += " dry-run"
     return 0, summary + (f" waiting={waiting}" if waiting else "")
+
+
+def _load_waiting_for_mysql(settings: Settings, rows: list[dict], day: dt.date, logger) -> dict:
+    """top_search.load_day, waiting for MySQL while it refuses connections (the day's rows are kept on disk,
+    and a repeated load skips what is stored, so trying again is safe)."""
+    import time
+
+    from app import top_search
+
+    for attempt in range(1, TOP_SEARCH_DB_ATTEMPTS + 1):
+        try:
+            return top_search.load_day(settings, rows, day)
+        except DatabaseError as exc:
+            if attempt == TOP_SEARCH_DB_ATTEMPTS:
+                raise
+            logger.warning("%s; trying again in %ds (%d of %d)", exc, TOP_SEARCH_DB_WAIT, attempt,
+                           TOP_SEARCH_DB_ATTEMPTS)
+            time.sleep(TOP_SEARCH_DB_WAIT)
 
 
 def _competitors_night(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:
