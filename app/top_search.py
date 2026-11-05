@@ -36,6 +36,7 @@ REPORT_TYPE = "GET_BRAND_ANALYTICS_SEARCH_TERMS_REPORT"
 TABLE = "day_wise_top_search"
 FIRST_DAY = dt.date(2026, 4, 29)  # the table holds Seller Central downloads up to 2026-04-28
 NOT_AVAILABLE = "not available yet"  # Amazon's FATAL reason for a day it has not published
+DOWNLOAD_ATTEMPTS = 4  # a ~100 MB download that breaks off is started again
 COLUMNS = ("search_frequency_rank", "search_term",
            "top_clicked_brand_1", "top_clicked_brand_2", "top_clicked_brand_3",
            "top_clicked_category_1", "top_clicked_category_2", "top_clicked_category_3",
@@ -49,8 +50,8 @@ class NotPublished(Exception):
 
 
 class Throttled(Exception):
-    """Amazon refused a new report request (HTTP 429): the app's createReport quota, about one a minute and
-    shared with the app's other programs, is used up for now."""
+    """Amazon refused a new report request (HTTP 429: the app's createReport quota, about one a minute and
+    shared with the app's other programs, is used up for now) or kept timing out on it."""
 
 
 def iter_records(chunks: Iterable[bytes], gzipped: bool) -> Iterator[dict]:
@@ -154,7 +155,8 @@ def request_day(client: SpApiClient, settings: Settings, day: dt.date) -> str:
     try:
         report_id = client._api("POST", f"{REPORTS_PATH}/reports", data=json.dumps(body))["reportId"]
     except SpApiError as exc:
-        if "HTTP 429" in str(exc):
+        # quota used up, or Amazon too slow to answer (read timeouts): both pass, so ask again later
+        if "HTTP 429" in str(exc) or "failed after retries" in str(exc):
             raise Throttled(str(day)) from None
         raise
     save_state(state_path, {"report_id": report_id})
@@ -178,12 +180,20 @@ def fetch_day(client: SpApiClient, settings: Settings, day: dt.date, asins: set[
         if NOT_AVAILABLE in str(exc):
             raise NotPublished(str(day)) from None
         raise
-    meta = client._api("GET", f"{REPORTS_PATH}/documents/{document_id}")
     started = time.monotonic()
-    with requests.get(meta["url"], stream=True, timeout=300) as resp:  # pre-signed URL: no SP-API headers
-        resp.raise_for_status()
-        records = iter_records(resp.iter_content(1 << 20), meta.get("compressionAlgorithm") == "GZIP")
-        rows = table_rows(brand_terms(_checked(records, day), asins, brand), day)
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        meta = client._api("GET", f"{REPORTS_PATH}/documents/{document_id}")  # a fresh URL: they expire
+        try:
+            with requests.get(meta["url"], stream=True, timeout=300) as resp:  # pre-signed URL: no SP-API headers
+                resp.raise_for_status()
+                records = iter_records(resp.iter_content(1 << 20), meta.get("compressionAlgorithm") == "GZIP")
+                rows = table_rows(brand_terms(_checked(records, day), asins, brand), day)
+            break
+        except requests.RequestException as exc:  # e.g. the connection reset halfway through the download
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise SpApiError(f"Top Search Terms {day}: download failed {attempt} times: {exc}") from None
+            log.warning("Top Search Terms %s: download broke off (%s); downloading again", day, exc)
+            client.sleep(30)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")

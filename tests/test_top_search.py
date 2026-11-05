@@ -147,6 +147,69 @@ def test_storing_a_day_waits_while_mysql_refuses_connections(monkeypatch):
     assert sleeps == [run.TOP_SEARCH_DB_WAIT] * 2
 
 
+def test_a_download_that_breaks_off_is_downloaded_again(monkeypatch, tmp_path):
+    import types
+
+    import requests
+
+    data = gzip.compress(json.dumps(report([rec("car sun shade", 7, 1, "B0OURS0001")])).encode())
+
+    class Response:
+        def __init__(self, broken):
+            self.broken = broken
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, size):
+            yield data[:20]
+            if self.broken:
+                raise requests.exceptions.ChunkedEncodingError("Connection broken: reset")
+            yield data[20:]
+
+    answers = [Response(True), Response(False)]
+    monkeypatch.setattr(requests, "get", lambda url, **kw: answers.pop(0))
+
+    class Client:
+        sleep = staticmethod(lambda s: None)
+
+        def wait_for_report(self, report_id, deadline=None):
+            return "D1"
+
+        def _api(self, method, path, **kw):
+            return {"url": "https://s3.example/d1", "compressionAlgorithm": "GZIP"}
+
+    settings = types.SimpleNamespace(data_dir=tmp_path, state_dir=tmp_path / "state", marketplace_id="ATVPDKIKX0DER")
+    top_search.save_state(tmp_path / "state" / "top_search_2026-04-29.json", {"report_id": "R1"})
+    rows = top_search.fetch_day(Client(), settings, DAY, {"B0OURS0001"}, "EcoNour")
+    assert [r["search_term"] for r in rows] == ["car sun shade"] and answers == []
+
+
+@pytest.mark.parametrize("error, throttled", [
+    ("POST /reports/2021-06-30/reports -> HTTP 429: QuotaExceeded", True),
+    ("POST https://sellingpartnerapi-na.amazon.com/reports failed after retries: Read timed out.", True),
+    ("POST /reports/2021-06-30/reports -> HTTP 403 (check the app has the Brand Analytics role)", False),
+])
+def test_a_refused_or_timed_out_report_request_is_asked_again_later(tmp_path, error, throttled):
+    import types
+
+    from app.exceptions import SpApiError
+
+    class Client:
+        def _api(self, *a, **kw):
+            raise SpApiError(error)
+
+    settings = types.SimpleNamespace(state_dir=tmp_path, marketplace_id="ATVPDKIKX0DER")
+    with pytest.raises(top_search.Throttled if throttled else SpApiError):
+        top_search.request_day(Client(), settings, DAY)
+
+
 def test_a_dry_run_never_stores(monkeypatch):
     import run
 

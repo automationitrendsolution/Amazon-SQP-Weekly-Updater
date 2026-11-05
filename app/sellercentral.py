@@ -115,12 +115,31 @@ def _click_if_present(page, selector: str, timeout_ms: int = 3000) -> bool:
     return True
 
 
+def _pick_saved_account(page, email: str, timeout_ms: int = 5000) -> bool:
+    """Amazon's "Switch accounts" page (the profile's session ended, e.g. after a password change): choose
+    the saved account with this email, else "Add account"; either leads on to the email / password form."""
+    try:
+        page.get_by_text("Switch accounts", exact=False).first.wait_for(state="visible", timeout=timeout_ms)
+    except Exception:
+        return False
+    if page.locator("#ap_email, #ap_password").count():  # a sign-in form with a "Switch accounts" link
+        return False
+    for label in (email, "Add account"):
+        tile = page.get_by_text(label, exact=False)
+        if tile.count():
+            tile.first.click()
+            _settle(page, 15000)
+            return True
+    return False
+
+
 def sign_in(settings: Settings, page, wait_for_person: bool) -> None:
     """Fill the sign-in form if Amazon shows it; OTP comes from the person (or the TOTP key)."""
     if _signed_in(page):
         return
     if not (settings.sc_email and settings.sc_password):
         raise ConfigurationError("set SELLERCENTRAL_EMAIL and SELLERCENTRAL_PASSWORD in .env")
+    _pick_saved_account(page, settings.sc_email, 2000)
     if _fill_if_present(page, "#ap_email", settings.sc_email):
         _click_if_present(page, "#continue")
     if _fill_if_present(page, "#ap_password", settings.sc_password):
@@ -179,6 +198,7 @@ def _terminal_sign_in(settings: Settings, page) -> None:
     """Email and password from .env; the OTP from the person at the terminal; the account picker by name."""
     if not (settings.sc_email and settings.sc_password):
         raise ConfigurationError("set SELLERCENTRAL_EMAIL and SELLERCENTRAL_PASSWORD (or AMAZON_*) in .env")
+    _pick_saved_account(page, settings.sc_email)
     if _fill_if_present(page, "#ap_email", settings.sc_email, 15000):
         _click_if_present(page, "#continue")
     if _fill_if_present(page, "#ap_password", settings.sc_password, 15000):
